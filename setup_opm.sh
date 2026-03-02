@@ -1,0 +1,507 @@
+#!/bin/bash
+# =============================================================================
+# OPM MEG Software Setup Script
+# =============================================================================
+# This script installs the required software for the OPM MEG module of NEU502B.
+# Run with: bash setup_opm.sh
+# =============================================================================
+
+set -e  # Exit on any error
+
+# --- OS Detection ---
+OS_TYPE="$(uname -s)"
+ARCH_TYPE="$(uname -m)"
+IS_WSL=false
+
+# Check for WSL (Windows Subsystem for Linux)
+if [ "$OS_TYPE" = "Linux" ] && grep -qi "microsoft\|WSL" /proc/version 2>/dev/null; then
+    IS_WSL=true
+fi
+
+# Block Git Bash / MSYS / Cygwin — require WSL instead
+case "$OS_TYPE" in
+    MINGW*|MSYS*|CYGWIN*)
+        echo "ERROR: This script does not support Git Bash, MSYS, or Cygwin."
+        echo ""
+        echo "Windows users must run this script inside WSL (Windows Subsystem for Linux)."
+        echo "To install WSL, open PowerShell as Administrator and run:"
+        echo ""
+        echo "    wsl --install"
+        echo ""
+        echo "Then restart your computer, open the Ubuntu terminal, and re-run this script."
+        exit 1
+        ;;
+esac
+
+# Helper function to open a URL in the default browser
+open_url() {
+    local url="$1"
+    if [ "$IS_WSL" = true ]; then
+        cmd.exe /c start "$url" 2>/dev/null || echo "Could not open browser. Please visit: $url"
+    elif [ "$OS_TYPE" = "Darwin" ]; then
+        open "$url"
+    elif [ "$OS_TYPE" = "Linux" ]; then
+        xdg-open "$url" 2>/dev/null || echo "Could not open browser. Please visit: $url"
+    else
+        echo "Please visit: $url"
+    fi
+}
+
+echo "============================================="
+echo "  OPM MEG Software Setup"
+echo "============================================="
+echo ""
+
+if [ "$IS_WSL" = true ]; then
+    echo "Detected: Windows (WSL)"
+elif [ "$OS_TYPE" = "Darwin" ]; then
+    echo "Detected: macOS ($ARCH_TYPE)"
+elif [ "$OS_TYPE" = "Linux" ]; then
+    echo "Detected: Linux ($ARCH_TYPE)"
+fi
+echo ""
+
+# --- Step 1: Install uv (Python package manager) ---
+echo "--- Step 1: Install uv ---"
+echo ""
+
+if command -v uv &> /dev/null; then
+    echo "✓ uv is already installed: $(uv --version)"
+else
+    echo "uv is not installed. Installing now..."
+    echo ""
+
+    if command -v curl &> /dev/null; then
+        echo "Using curl to install uv..."
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+    elif command -v wget &> /dev/null; then
+        echo "Using wget to install uv..."
+        wget -qO- https://astral.sh/uv/install.sh | sh
+    else
+        echo "ERROR: Neither curl nor wget is available."
+        echo "Please install curl or wget first, then re-run this script."
+        exit 1
+    fi
+
+    # The uv installer adds to PATH via shell config, but that won't take
+    # effect in this running shell. Source it or add manually.
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+fi
+
+# Verify uv is working
+echo ""
+if uv --help &> /dev/null; then
+    echo "✓ uv is available and working ($(uv --version))"
+else
+    echo "ERROR: uv was installed but could not be found on PATH."
+    echo "Try opening a new terminal and re-running this script."
+    exit 1
+fi
+echo ""
+
+# --- mne-opm (dev branch) by Harrison Ritz ---
+echo "--- Step 2: Install mne-opm (dev branch) ---"
+echo ""
+
+# Prompt for install location
+DEFAULT_DIR="$HOME/software"
+read -rp "Install mne-opm to $DEFAULT_DIR? [Y/n]: " USE_DEFAULT_DIR
+if [[ "$USE_DEFAULT_DIR" =~ ^[Nn]$ ]]; then
+    read -rp "Enter the install directory: " INSTALL_DIR
+    INSTALL_DIR="${INSTALL_DIR/#\~/$HOME}"
+else
+    INSTALL_DIR="$DEFAULT_DIR"
+fi
+
+# Create the directory if it doesn't exist
+if [ ! -d "$INSTALL_DIR" ]; then
+    echo "Creating directory: $INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR"
+fi
+
+# Clone and install mne-opm
+cd "$INSTALL_DIR"
+
+if [ -d "$INSTALL_DIR/mne-opm" ]; then
+    echo ""
+    echo "mne-opm directory already exists at $INSTALL_DIR/mne-opm"
+    read -rp "Would you like to remove it and re-clone? [y/N]: " RECLONE
+    if [[ "$RECLONE" =~ ^[Yy]$ ]]; then
+        echo "Removing existing mne-opm directory..."
+        rm -rf "$INSTALL_DIR/mne-opm"
+    else
+        echo "Skipping clone. Attempting install from existing directory..."
+    fi
+fi
+
+if [ ! -d "$INSTALL_DIR/mne-opm" ]; then
+    echo ""
+    echo "Cloning mne-opm (dev branch) from GitHub..."
+    git clone -b dev https://github.com/harrisonritz/mne-opm.git
+fi
+
+echo "Installing mne-opm in editable mode..."
+pip install -e "$INSTALL_DIR/mne-opm"
+
+echo ""
+echo "✓ mne-opm (dev branch) installed successfully!"
+echo "  Location: $INSTALL_DIR/mne-opm"
+echo ""
+
+# --- Step 3: Run uv sync ---
+echo "--- Step 3: Sync dependencies with uv ---"
+echo ""
+echo "This creates a virtual environment and builds Harrison's forks of:"
+echo "  - mne-bids-pipeline"
+echo "  - mne-bids"
+echo "  - osl-ephys"
+echo "  - mne"
+echo ""
+
+cd "$INSTALL_DIR/mne-opm"
+echo "Running uv sync in $INSTALL_DIR/mne-opm..."
+uv sync
+
+echo ""
+echo "✓ uv sync complete!"
+echo ""
+
+# --- Step 4: Verify installation ---
+echo "--- Step 4: Verify installation ---"
+echo ""
+echo "Running mne-opm.sh to check that everything is set up correctly..."
+echo "Expecting a 'pipeline not set' error with usage instructions."
+echo ""
+
+OUTPUT=$(bash "$INSTALL_DIR/mne-opm/mne-opm.sh" 2>&1) || true
+echo "$OUTPUT"
+echo ""
+
+if echo "$OUTPUT" | grep -qi "pipeline not set\|usage"; then
+    echo "✓ Installation verified! The expected error and usage instructions appeared."
+else
+    echo "WARNING: Did not see the expected 'pipeline not set' message."
+    echo "Please review the output above and check your installation."
+fi
+echo ""
+
+
+# --- Step 5: FreeSurfer ---
+echo "--- Step 5: Set up FreeSurfer ---"
+echo ""
+
+# Search common install locations for FreeSurfer
+FOUND_FS=""
+FS_SEARCH_DIRS=("/Applications/freesurfer" "$HOME/Applications/freesurfer" "/usr/local/freesurfer" "$HOME/freesurfer")
+
+# Add Windows paths for WSL users
+if [ "$IS_WSL" = true ]; then
+    FS_SEARCH_DIRS+=("/mnt/c/freesurfer" "/mnt/c/Program Files/freesurfer")
+fi
+
+for search_dir in "${FS_SEARCH_DIRS[@]}"; do
+    if [ -d "$search_dir" ]; then
+        # Look for version subdirectories or direct install
+        if [ -f "$search_dir/SetUpFreeSurfer.sh" ]; then
+            FOUND_FS="$search_dir"
+            break
+        fi
+        # Check for versioned subdirectories (e.g., 8.1.0)
+        for version_dir in "$search_dir"/*/; do
+            if [ -f "${version_dir}SetUpFreeSurfer.sh" ]; then
+                FOUND_FS="${version_dir%/}"
+                break 2
+            fi
+        done
+    fi
+done
+
+if [ -n "$FOUND_FS" ]; then
+    echo "✓ FreeSurfer found at: $FOUND_FS"
+    read -rp "Use this path for FREESURFER_HOME? [Y/n]: " USE_FOUND
+    if [[ ! "$USE_FOUND" =~ ^[Nn]$ ]]; then
+        FREESURFER_HOME="$FOUND_FS"
+    fi
+fi
+
+if [ -z "$FREESURFER_HOME" ]; then
+    echo "FreeSurfer was not detected on this system."
+    echo ""
+    echo "FreeSurfer 8.1.0 is required. Let's get it installed."
+    echo ""
+
+    # Determine the correct download package
+    DOWNLOAD_URL="https://surfer.nmr.mgh.harvard.edu/pub/dist/freesurfer/8.1.0/"
+    PACKAGE_NAME=""
+
+    case "$OS_TYPE" in
+        Darwin)
+            if [ "$ARCH_TYPE" = "arm64" ]; then
+                PACKAGE_NAME="freesurfer-macOS-darwin_arm64-8.1.0.pkg"
+                echo "Detected: macOS (Apple Silicon)"
+            else
+                PACKAGE_NAME="freesurfer-macOS-darwin_x86_64-8.1.0.pkg"
+                echo "Detected: macOS (Intel)"
+            fi
+            ;;
+        Linux)
+            PACKAGE_NAME="freesurfer-linux-ubuntu22-x86_64-8.1.0.tar.xz"
+            if [ "$IS_WSL" = true ]; then
+                echo "Detected: Windows (WSL) — using Linux package"
+            else
+                echo "Detected: Linux (x86_64)"
+            fi
+            echo "  Note: If you're not on Ubuntu 22, check the download page"
+            echo "  for the correct package for your distro."
+            ;;
+        *)
+            echo "Detected: $OS_TYPE (unsupported for auto-detection)"
+            ;;
+    esac
+
+    echo ""
+
+    if [ -n "$PACKAGE_NAME" ]; then
+        echo "Recommended package: $PACKAGE_NAME"
+        echo "Download URL: ${DOWNLOAD_URL}${PACKAGE_NAME}"
+        echo ""
+        read -rp "Would you like to open the download page in your browser? [Y/n]: " OPEN_BROWSER
+        if [[ ! "$OPEN_BROWSER" =~ ^[Nn]$ ]]; then
+            open_url "${DOWNLOAD_URL}"
+        fi
+    else
+        echo "Please download FreeSurfer 8.1.0 from:"
+        echo "  ${DOWNLOAD_URL}"
+    fi
+
+    echo ""
+    echo "============================================="
+    echo "  Install FreeSurfer, then return here."
+    echo "  Press ENTER when ready to continue..."
+    echo "============================================="
+    read -r
+
+    # Prompt for the FreeSurfer path
+    while true; do
+        read -rp "Enter the path to your FreeSurfer installation (example: /Applications/freesurfer/8.1.0): " FREESURFER_HOME
+        FREESURFER_HOME="${FREESURFER_HOME/#\~/$HOME}"
+
+        if [ -f "$FREESURFER_HOME/SetUpFreeSurfer.sh" ]; then
+            echo "✓ FreeSurfer verified at: $FREESURFER_HOME"
+            break
+        else
+            echo "ERROR: Could not find SetUpFreeSurfer.sh in $FREESURFER_HOME"
+            echo "  Please try again."
+            echo ""
+        fi
+    done
+fi
+
+echo ""
+echo "FREESURFER_HOME=$FREESURFER_HOME"
+echo ""
+
+# --- Step 6: Set up project paths for the sample project ---
+echo "--- Step 6: Set up project paths for the sample project ---"
+echo ""
+echo "You need to provide a root projects folder (OPM_DIR) for all opm projects."
+echo ""
+
+DEFAULT_ROOT="$HOME/opm-projects"
+read -rp "Use $DEFAULT_ROOT? [Y/n]: " USE_DEFAULT
+if [[ "$USE_DEFAULT" =~ ^[Nn]$ ]]; then
+    read -rp "Enter the root projects folder: " OPM_DIR
+    OPM_DIR="${OPM_DIR/#\~/$HOME}"
+else
+    OPM_DIR="$DEFAULT_ROOT"
+fi
+
+if [ ! -d "$OPM_DIR" ]; then
+    echo "Creating OPM_DIR: $OPM_DIR"
+    mkdir -p "$OPM_DIR"
+else
+    echo "✓ OPM_DIR already exists: $OPM_DIR"
+fi
+echo ""
+
+# Project variables
+PIPELINE="preproc"
+EXPERIMENT="oddball"
+ANALYSIS="analysis1"
+SUBJECT="001"
+SESSION="01"
+
+# Project paths
+MNE_OPM_DIR="$INSTALL_DIR/mne-opm"
+ROOT_DIR="$OPM_DIR/$EXPERIMENT"
+DATA_BASE="$ROOT_DIR/data"
+BIDS_DIR="$DATA_BASE/bids"
+CONFIG_BASE="$DATA_BASE/configs"
+SUBJECTS_DIR="$BIDS_DIR/derivatives/freesurfer"
+
+echo "Creating project directory structure in $ROOT_DIR..."
+echo ""
+
+# Tree 1: raw/
+mkdir -p "$DATA_BASE/raw/sub_${SUBJECT}/dicom"
+mkdir -p "$DATA_BASE/raw/sub_${SUBJECT}/anat"
+mkdir -p "$DATA_BASE/raw/sub_${SUBJECT}/session1_task"
+mkdir -p "$DATA_BASE/raw/sub_${SUBJECT}/session1_noise"
+mkdir -p "$DATA_BASE/raw/sub_${SUBJECT}/metadata"
+mkdir -p "$DATA_BASE/raw/sub_${SUBJECT}/eyetracking"
+
+# Tree 2: bids/
+mkdir -p "$BIDS_DIR/sub-${SUBJECT}/ses-${SESSION}/meg"
+mkdir -p "$BIDS_DIR/sub-${SUBJECT}/ses-${SESSION}/anat"
+mkdir -p "$BIDS_DIR/derivatives/freesurfer/subjects"
+mkdir -p "$BIDS_DIR/derivatives/${ANALYSIS}"
+
+# Tree 3: configs/
+mkdir -p "$CONFIG_BASE/${EXPERIMENT}/bids"
+
+# Analysis directory
+mkdir -p "$ROOT_DIR/analysis"
+
+echo "✓ Directory structure created!"
+echo ""
+echo "Directory layout:"
+echo ""
+echo "  $ROOT_DIR/"
+echo "  ├── analysis/"
+echo "  └── data/"
+echo "      ├── raw/"
+echo "      │   └── sub_${SUBJECT}/"
+echo "      │       ├── dicom/"
+echo "      │       ├── anat/"
+echo "      │       ├── session1_task/"
+echo "      │       ├── session1_noise/"
+echo "      │       ├── metadata/"
+echo "      │       └── eyetracking/"
+echo "      ├── bids/"
+echo "      │   ├── sub-${SUBJECT}/"
+echo "      │   │   └── ses-${SESSION}/"
+echo "      │   │       ├── meg/"
+echo "      │   │       └── anat/"
+echo "      │   └── derivatives/"
+echo "      │       ├── freesurfer/"
+echo "      │       │   └── subjects/"
+echo "      │       └── ${ANALYSIS}/"
+echo "      └── configs/"
+echo "          └── ${EXPERIMENT}/"
+echo "              └── bids/"
+echo ""
+echo "Project variables:"
+echo "  PIPELINE     = $PIPELINE"
+echo "  EXPERIMENT   = $EXPERIMENT"
+echo "  ANALYSIS     = $ANALYSIS"
+echo "  SUBJECT      = $SUBJECT"
+echo "  SESSION      = $SESSION"
+echo ""
+echo "Project paths:"
+echo "  OPM_DIR      = $OPM_DIR"
+echo "  MNE_OPM_DIR  = $MNE_OPM_DIR"
+echo "  ROOT_DIR     = $ROOT_DIR"
+echo "  DATA_BASE    = $DATA_BASE"
+echo "  BIDS_DIR     = $BIDS_DIR"
+echo "  CONFIG_BASE  = $CONFIG_BASE"
+echo "  SUBJECTS_DIR = $SUBJECTS_DIR"
+echo ""
+
+# --- Step 7: Download sample files ---
+echo "--- Step 7: Download sample files ---"
+echo ""
+
+GITHUB_RAW="https://raw.githubusercontent.com/mrribbits/NEU502-2026/main"
+
+# Ensure directories exist
+mkdir -p "$ROOT_DIR/analysis"
+mkdir -p "$CONFIG_BASE/$EXPERIMENT"
+mkdir -p "$CONFIG_BASE/$EXPERIMENT/bids"
+
+echo "Downloading runlocal-mne-opm.sh -> $ROOT_DIR/analysis/"
+if command -v curl &> /dev/null; then
+    curl -LsSf "$GITHUB_RAW/runlocal-mne-opm.sh" -o "$ROOT_DIR/analysis/runlocal-mne-opm.sh"
+else
+    wget -q "$GITHUB_RAW/runlocal-mne-opm.sh" -O "$ROOT_DIR/analysis/runlocal-mne-opm.sh"
+fi
+chmod +x "$ROOT_DIR/analysis/runlocal-mne-opm.sh"
+
+echo "Downloading config-analysis1.py -> $CONFIG_BASE/$EXPERIMENT/"
+if command -v curl &> /dev/null; then
+    curl -LsSf "$GITHUB_RAW/config-analysis1.py" -o "$CONFIG_BASE/$EXPERIMENT/config-analysis1.py"
+else
+    wget -q "$GITHUB_RAW/config-analysis1.py" -O "$CONFIG_BASE/$EXPERIMENT/config-analysis1.py"
+fi
+
+echo "Downloading sub-001_config-bids.py -> $CONFIG_BASE/$EXPERIMENT/bids/"
+if command -v curl &> /dev/null; then
+    curl -LsSf "$GITHUB_RAW/sub-001_config-bids.py" -o "$CONFIG_BASE/$EXPERIMENT/bids/sub-001_config-bids.py"
+else
+    wget -q "$GITHUB_RAW/sub-001_config-bids.py" -O "$CONFIG_BASE/$EXPERIMENT/bids/sub-001_config-bids.py"
+fi
+
+echo ""
+echo "✓ Sample files downloaded:"
+echo ""
+echo "  $ROOT_DIR/analysis/runlocal-mne-opm.sh"
+echo "    This bash script runs single analysis pipeline stages (e.g., nifti, bids,"
+echo "    freesurfer, coreg, preproc, sensor, source, func, anat). It exports"
+echo "    environment variables needed for the actual pipeline run scripts."
+echo ""
+echo "  $CONFIG_BASE/$EXPERIMENT/config-analysis1.py"
+echo "    This is the configuration file where you set any pipeline parameters"
+echo "    (except bids conversion, see next file). You can keep this in"
+echo "    $CONFIG_BASE/$EXPERIMENT/"
+echo ""
+echo "  $CONFIG_BASE/$EXPERIMENT/bids/sub-001_config-bids.py"
+echo "    This is the configuration file for a subject's raw to bids conversion."
+echo "    You would have one file per subject in $CONFIG_BASE/$EXPERIMENT/bids/"
+echo ""
+
+echo ""
+
+# --- Step 8: Configure runlocal-mne-opm.sh with the sample project settings ---
+echo "--- Step 8: Configure runlocal-mne-opm.sh with the sample project settings ---"
+echo ""
+RUN_SCRIPT="$ROOT_DIR/analysis/runlocal-mne-opm.sh"
+
+sed -i.bak \
+    -e "s|^PIPELINE=.*|PIPELINE=\"$PIPELINE\"|" \
+    -e "s|^EXPERIMENT=.*|EXPERIMENT=\"$EXPERIMENT\"|" \
+    -e "s|^ANALYSIS=.*|ANALYSIS=\"$ANALYSIS\"|" \
+    -e "s|^SESSION=.*|SESSION=\"$SESSION\"|" \
+    -e "s|^SUBJECT=.*|SUBJECT=\"$SUBJECT\"|" \
+    -e "s|^FREESURFER_HOME=.*|FREESURFER_HOME=\"$FREESURFER_HOME\"|" \
+    -e "s|^ROOT_DIR=.*|ROOT_DIR=\"$ROOT_DIR\"|" \
+    -e "s|^CONFIG_BASE=.*|CONFIG_BASE=\"$CONFIG_BASE\"|" \
+    -e "s|^DATA_BASE=.*|DATA_BASE=\"$DATA_BASE\"|" \
+    -e "s|^SUBJECTS_DIR=.*|SUBJECTS_DIR=\"$SUBJECTS_DIR\"|" \
+    -e "s|^MNE_OPM_DIR=.*|MNE_OPM_DIR=\"$MNE_OPM_DIR\"|" \
+    "$RUN_SCRIPT"
+
+# Remove the backup file created by sed
+rm -f "${RUN_SCRIPT}.bak"
+
+echo "✓ runlocal-mne-opm.sh configured with the sample project settings."
+echo ""
+
+echo "============================================="
+echo "  Setup complete!"
+echo "============================================="
+echo ""
+
+echo "---------------------------------------------"
+echo "  TIP: To run Python scripts in the mne-opm"
+echo "  environment, use:"
+echo ""
+echo "    cd $INSTALL_DIR/mne-opm"
+echo "    uv run python my_script.py"
+echo ""
+echo "---------------------------------------------"
+echo ""
+
+echo "For more details on mne-opm, see Harrison Ritz's documentation."
+read -rp "Would you like to open the mne-opm GitHub page? [Y/n]: " OPEN_GITHUB
+if [[ ! "$OPEN_GITHUB" =~ ^[Nn]$ ]]; then
+    open_url "https://github.com/harrisonritz/mne-opm"
+fi
