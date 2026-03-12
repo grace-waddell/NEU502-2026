@@ -195,6 +195,13 @@ else
     echo "⚠ Could not find _06a2_find_ica_artifacts.py — patch skipped."
 fi
 
+# Apply local patches to mne-bids-pipeline
+echo "Applying local patches..."
+PIPELINE_STEP=".venv/lib/python3.13/site-packages/mne_bids_pipeline/steps/preprocessing/_06a2_find_ica_artifacts.py"
+patch --forward --reject-file=- "$PIPELINE_STEP" patches/fix_ica_eog_scores_ndim.patch \
+  && echo "  ✓ fix_ica_eog_scores_ndim applied" \
+  || echo "  ✓ fix_ica_eog_scores_ndim already applied or not needed"
+
 echo ""
 echo "✓ uv sync complete!"
 echo ""
