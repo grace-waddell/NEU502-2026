@@ -329,6 +329,19 @@ if [ -z "$FREESURFER_HOME" ]; then
         fi
     done
 fi
+#     while true; do
+#         FREESURFER_HOME="${FREESURFER_HOME/#\~/$HOME}"
+
+#         if [ -f "$FREESURFER_HOME/SetUpFreeSurfer.sh" ]; then
+#             echo "✓ FreeSurfer verified at: $FREESURFER_HOME"
+#             break
+#         else
+#             echo "ERROR: Could not find SetUpFreeSurfer.sh in $FREESURFER_HOME"
+#             echo "  Please try again."
+#             echo ""
+#         fi
+#     done
+ fi
 
 echo ""
 echo "FREESURFER_HOME=$FREESURFER_HOME"
